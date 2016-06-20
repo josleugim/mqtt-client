@@ -42,18 +42,13 @@
 /************ *********/
 #define LAMP_ONE       8  //   
 #define SWITCH_ONE     9 // switch for the lamp 1
-#define LAMP_TWO       6 // input for the switch
-#define SWITCH_TWO     7 // switch fot the lamp 2
-//#define LAMP_THREE     2 // input for the switch
-//#define SWITCH_THREE   4 // switch fot the lamp 2
+#define LAMP_TWO       6 // input pin
+#define SWITCH_TWO     7 // output pin
+#define LAMP_THREE     2 // input for the switch
+#define SWITCH_THREE   4 // switch fot the lamp 2
 
-int lastButtonStateOne;       
-int actualButtonStateOne;
-int lastButtonStateTwo;       
-int actualButtonStateTwo;
-//int lastButtonStateThree;
-//int actualButtonStateThree;
-
+int lastSwitchTwoState;
+int lastLampTwoState;
 /************ Global State (you don't need to change this!) ******************/
 
 // Setup the main CC3000 class, just like a normal CC3000 sketch.
@@ -92,11 +87,11 @@ Adafruit_MQTT_Publish lamp2State = Adafruit_MQTT_Publish(&mqtt, STREETLAMP2STATE
 const char STREETLAMP2[] PROGMEM = AIO_USERNAME "/groundfloor/frontyard/lamp2";
 Adafruit_MQTT_Subscribe lamp2 = Adafruit_MQTT_Subscribe(&mqtt, STREETLAMP2);
 
-/*const char LAMP3STATE[] PROGMEM = AIO_USERNAME "/groundfloor/frontyard/lamp3state";
+const char LAMP3STATE[] PROGMEM = AIO_USERNAME "/groundfloor/frontyard/lamp3state";
 Adafruit_MQTT_Publish lamp3State = Adafruit_MQTT_Publish(&mqtt, LAMP3STATE);
 
 const char STREETLAMP3[] PROGMEM = AIO_USERNAME "/groundfloor/frontyard/lamp3";
-Adafruit_MQTT_Subscribe lamp3 = Adafruit_MQTT_Subscribe(&mqtt, STREETLAMP3);*/
+Adafruit_MQTT_Subscribe lamp3 = Adafruit_MQTT_Subscribe(&mqtt, STREETLAMP3);
 
 /*************************** Sketch Code ************************************/
 
@@ -106,18 +101,19 @@ void setup() {
   // define the pin modes
   pinMode(LAMP_ONE, OUTPUT);
   pinMode(SWITCH_ONE, INPUT);
-  pinMode(LAMP_TWO, OUTPUT);
-  pinMode(SWITCH_TWO, INPUT);
-  /*pinMode(LAMP_THREE, OUTPUT);
-  pinMode(SWITCH_THREE, INPUT);*/
+  pinMode(LAMP_TWO, INPUT);
+  pinMode(SWITCH_TWO, OUTPUT);
+  pinMode(LAMP_THREE, OUTPUT);
+  pinMode(SWITCH_THREE, INPUT);
 
   Serial.println(F("\nAdafruit MQTT"));
   Serial.print(F("\nFree RAM: ")); Serial.println(getFreeRam(), DEC);
 
   // initialize the lamps
   digitalWrite(LAMP_ONE, LOW);
-  digitalWrite(LAMP_TWO, LOW);
-  //digitalWrite(LAMP_THREE, LOW);
+  digitalWrite(SWITCH_TWO, LOW); // switch initialize as off
+  digitalWrite(LAMP_THREE, LOW);
+  lastSwitchTwoState = LOW;
 
   // Initialise the CC3000 module
   Serial.print(F("\nInit the CC3000..."));
@@ -140,31 +136,30 @@ void loop() {
   // Make sure to reset watchdog every loop iteration!
   Watchdog.reset();
 
+  // Wait for the push button
+  LampOne(digitalRead(SWITCH_ONE));
+  publishLamp2Status(digitalRead(LAMP_TWO));
+  LampThree(digitalRead(SWITCH_THREE));
   // Ensure the connection to the MQTT server is alive (this will make the first
   // connection and automatically reconnect when disconnected).  See the MQTT_connect
   // function definition further below.
   MQTT_connect();
-  
-  // Wait for the push button
-  StreetLampOne(digitalRead(SWITCH_ONE));
-  StreetLampTwo(digitalRead(SWITCH_TWO));
-  //LampThree(digitalRead(SWITCH_THREE));
 
   // this is our 'wait for incoming subscription packets' busy subloop
   Adafruit_MQTT_Subscribe *subscription;
-  while ((subscription = mqtt.readSubscription(500))) {
+  while ((subscription = mqtt.readSubscription(1000))) {
     if(subscription == &lamp1) {
       char *value = (char*)lamp1.lastread;
-      StreetLampOne(atoi(value));
+      LampOne(atoi(value));
     }
     if(subscription == &lamp2) {
       char *value = (char*)lamp2.lastread;
-      StreetLampTwo(atoi(value));
+      LampTwoIot(atoi(value));
     }
-    /*if(subscription == &lamp3) {
+    if(subscription == &lamp3) {
       char *value = (char*)lamp3.lastread;
       LampThree(atoi(value));
-    }*/
+    }
   }
 
   // ping the server to keep the mqtt connection alive
@@ -177,28 +172,24 @@ void loop() {
 // Should be called in the loop function and it will take care if connecting.
 void MQTT_connect() {
   int8_t ret;
-
   // Stop if already connected.
   if (mqtt.connected()) {
     return;
   }
 
   Serial.print("\nConnecting to MQTT... ");
-
   while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
        Serial.println(mqtt.connectErrorString(ret));
        if (ret < 0)
-            CC3000connect(WLAN_SSID, WLAN_PASS, WLAN_SECURITY);  // y0w, lets connect to wifi again
+          CC3000connect(WLAN_SSID, WLAN_PASS, WLAN_SECURITY);  // y0w, lets connect to wifi again
        Serial.println("Retrying MQTT connection in 5 seconds...");
        mqtt.disconnect();
-       delay(5000);  // wait 5 seconds
+       delay(5000);  // wait 5 seconds  
   }
-  Serial.println("MQTT Connected!");
 }
 
-void StreetLampOne(int lastSwitchState) {
-  if(lastSwitchState == HIGH) {
-    Serial.print("\nSwitch one pressed: ");
+void LampOne(int switchState) {
+  if(switchState == HIGH) {
     // Cambiar el estado del foco
       if(digitalRead(LAMP_ONE) == 1) {
         digitalWrite(LAMP_ONE, LOW);
@@ -211,38 +202,52 @@ void StreetLampOne(int lastSwitchState) {
   }
 }
 
-void StreetLampTwo(int lastSwitchState) {
-  lastButtonStateTwo = lastSwitchState;
-  if (lastButtonStateTwo != actualButtonStateTwo) {    // Valor del switch ha cambiado!
-    if (lastButtonStateTwo == HIGH) {               // Verificar si el boton se ha presionado
-      // Cambiar el estado del foco
-      if(digitalRead(LAMP_TWO) == 1) {
-        digitalWrite(LAMP_TWO, LOW);
-        lamp2State.publish("0");
-      }
-      else {
-        digitalWrite(LAMP_TWO, HIGH);
-        lamp2State.publish("1");
-      }
-    }
+void publishLamp2Status(int lampState) {
+  if((lampState == LOW) && (lastLampTwoState != lampState)) {
+    lamp2State.publish("0");
+    lastLampTwoState = LOW;
   }
-  actualButtonStateTwo = lastButtonStateTwo;
+  if((lampState == HIGH) && (lastLampTwoState != lampState)) {
+    lamp2State.publish("1");
+    lastLampTwoState = HIGH;
+  }
 }
 
-/*void LampThree(int lastSwitchState) {
-  lastButtonStateThree = lastSwitchState;
-  if (lastButtonStateThree != actualButtonStateThree) {    // Valor del switch ha cambiado!
-    if (lastButtonStateThree == HIGH) {               // Verificar si el boton se ha presionado
-      // Cambiar el estado del foco
-      if(digitalRead(LAMP_THREE) == 1) {
-        digitalWrite(LAMP_THREE, LOW);
-        lamp3State.publish("0");
+void LampTwoIot(int switchState) {
+  if(switchState == HIGH) {
+    if(digitalRead(LAMP_TWO) == LOW) {
+      if(lastSwitchTwoState == HIGH) {
+        digitalWrite(SWITCH_TWO, LOW);
+        lastSwitchTwoState = LOW;
+      } else {
+        digitalWrite(SWITCH_TWO, HIGH);
+        lastSwitchTwoState = HIGH;
       }
-      else {
-        digitalWrite(LAMP_THREE, HIGH);
-        lamp3State.publish("1");
+      lamp2State.publish("1");
+    }
+    if(digitalRead(LAMP_TWO) == HIGH) {
+      if(lastSwitchTwoState == HIGH) {
+        digitalWrite(SWITCH_TWO, LOW);
+        lastSwitchTwoState = LOW;
+      } else {
+        digitalWrite(SWITCH_TWO, HIGH);
+        lastSwitchTwoState = HIGH;
       }
+      lamp2State.publish("0");
     }
   }
-  actualButtonStateThree = lastButtonStateThree;
-}*/
+}
+
+void LampThree(int switchState) {
+  if(switchState == HIGH) {
+    // switch the lamp state
+    if(digitalRead(LAMP_THREE) == 1) {
+      digitalWrite(LAMP_THREE, LOW);
+      lamp3State.publish("0");
+    }
+    else {
+        digitalWrite(LAMP_THREE, HIGH);
+        lamp3State.publish("1");
+    }
+  }
+}
