@@ -27,7 +27,7 @@
 
 /************************* WiFi Access Point *********************************/
 
-#define WLAN_SSID       "INFINITUM0004"  // can't be longer than 32 characters!
+#define WLAN_SSID       ""  // can't be longer than 32 characters!
 #define WLAN_PASS       ""
 #define WLAN_SECURITY   WLAN_SEC_WPA2  // Can be: WLAN_SEC_UNSEC, WLAN_SEC_WEP,
                                        //         WLAN_SEC_WPA or WLAN_SEC_WPA2
@@ -40,15 +40,19 @@
 #define AIO_KEY         ""
 
 /************ *********/
-#define LAMP_ONE       8  //   
-#define SWITCH_ONE     9 // switch for the lamp 1
+#define LAMP_ONE       8 // input pin  
+#define SWITCH_ONE     9 // output pin
 #define LAMP_TWO       6 // input pin
 #define SWITCH_TWO     7 // output pin
 #define LAMP_THREE     2 // input for the switch
 #define SWITCH_THREE   4 // switch fot the lamp 2
 
+int lastSwitchOneState;
+int lastLampOneState;
 int lastSwitchTwoState;
 int lastLampTwoState;
+int lastSwitchThreeState;
+int lastLampThreeState;
 /************ Global State (you don't need to change this!) ******************/
 
 // Setup the main CC3000 class, just like a normal CC3000 sketch.
@@ -99,21 +103,23 @@ void setup() {
   Serial.begin(115200);
 
   // define the pin modes
-  pinMode(LAMP_ONE, OUTPUT);
-  pinMode(SWITCH_ONE, INPUT);
+  pinMode(LAMP_ONE, INPUT);
+  pinMode(SWITCH_ONE, OUTPUT);
   pinMode(LAMP_TWO, INPUT);
   pinMode(SWITCH_TWO, OUTPUT);
-  pinMode(LAMP_THREE, OUTPUT);
-  pinMode(SWITCH_THREE, INPUT);
+  pinMode(LAMP_THREE, INPUT);
+  pinMode(SWITCH_THREE, OUTPUT);
 
   Serial.println(F("\nAdafruit MQTT"));
   Serial.print(F("\nFree RAM: ")); Serial.println(getFreeRam(), DEC);
 
-  // initialize the lamps
-  digitalWrite(LAMP_ONE, LOW);
-  digitalWrite(SWITCH_TWO, LOW); // switch initialize as off
-  digitalWrite(LAMP_THREE, LOW);
+  // initialize the switch
+  digitalWrite(SWITCH_ONE, LOW);
+  digitalWrite(SWITCH_TWO, LOW);
+  digitalWrite(SWITCH_THREE, LOW);
+  lastSwitchOneState = LOW;
   lastSwitchTwoState = LOW;
+  lastSwitchThreeState = LOW;
 
   // Initialise the CC3000 module
   Serial.print(F("\nInit the CC3000..."));
@@ -123,7 +129,7 @@ void setup() {
   // do the subscribe
   mqtt.subscribe(&lamp1);
   mqtt.subscribe(&lamp2);
-  //mqtt.subscribe(&lamp3);
+  mqtt.subscribe(&lamp3);
   
   // attempt wifi connection
   while (! CC3000connect(WLAN_SSID, WLAN_PASS, WLAN_SECURITY)) {
@@ -136,10 +142,10 @@ void loop() {
   // Make sure to reset watchdog every loop iteration!
   Watchdog.reset();
 
-  // Wait for the push button
-  LampOne(digitalRead(SWITCH_ONE));
+  // publish the status of the lamp to the broker
+  publishLamp1Status(digitalRead(LAMP_ONE));
   publishLamp2Status(digitalRead(LAMP_TWO));
-  LampThree(digitalRead(SWITCH_THREE));
+  publishLamp3Status(digitalRead(LAMP_THREE));
   // Ensure the connection to the MQTT server is alive (this will make the first
   // connection and automatically reconnect when disconnected).  See the MQTT_connect
   // function definition further below.
@@ -150,15 +156,15 @@ void loop() {
   while ((subscription = mqtt.readSubscription(1000))) {
     if(subscription == &lamp1) {
       char *value = (char*)lamp1.lastread;
-      LampOne(atoi(value));
+      ChangeLamp1Status(atoi(value));
     }
     if(subscription == &lamp2) {
       char *value = (char*)lamp2.lastread;
-      LampTwoIot(atoi(value));
+      ChangeLamp2Status(atoi(value));
     }
     if(subscription == &lamp3) {
       char *value = (char*)lamp3.lastread;
-      LampThree(atoi(value));
+      ChangeLamp3Status(atoi(value));
     }
   }
 
@@ -186,6 +192,7 @@ void MQTT_connect() {
        mqtt.disconnect();
        delay(5000);  // wait 5 seconds  
   }
+  Serial.println("MQTT Connected!");
 }
 
 void LampOne(int switchState) {
@@ -201,7 +208,16 @@ void LampOne(int switchState) {
       }
   }
 }
-
+void publishLamp1Status(int lampState) {
+  if((lampState == LOW) && (lastLampOneState != lampState)) {
+    lamp1State.publish("0");
+    lastLampOneState = LOW;
+  }
+  if((lampState == HIGH) && (lastLampOneState != lampState)) {
+    lamp1State.publish("1");
+    lastLampOneState = HIGH;
+  }
+}
 void publishLamp2Status(int lampState) {
   if((lampState == LOW) && (lastLampTwoState != lampState)) {
     lamp2State.publish("0");
@@ -212,10 +228,42 @@ void publishLamp2Status(int lampState) {
     lastLampTwoState = HIGH;
   }
 }
+void publishLamp3Status(int lampState) {
+  if((lampState == LOW) && (lastLampThreeState != lampState)) {
+    lamp3State.publish("0");
+    lastLampThreeState = LOW;
+  }
+  if((lampState == HIGH) && (lastLampThreeState != lampState)) {
+    lamp3State.publish("1");
+    lastLampThreeState = HIGH;
+  }
+}
 
-void LampTwoIot(int switchState) {
-  if(switchState == HIGH) {
-    if(digitalRead(LAMP_TWO) == LOW) {
+void ChangeLamp1Status(int switchState) {
+  if((digitalRead(LAMP_ONE) == LOW) && (switchState == HIGH)) {
+      if(lastSwitchOneState == HIGH) {
+        digitalWrite(SWITCH_ONE, LOW);
+        lastSwitchOneState = LOW;
+      } else {
+        digitalWrite(SWITCH_ONE, HIGH);
+        lastSwitchOneState = HIGH;
+      }
+      lamp1State.publish("1");
+    }
+    if((digitalRead(LAMP_ONE) == HIGH) && (switchState == LOW)) {
+      if(lastSwitchOneState == HIGH) {
+        digitalWrite(SWITCH_ONE, LOW);
+        lastSwitchOneState = LOW;
+      } else {
+        digitalWrite(SWITCH_ONE, HIGH);
+        lastSwitchOneState = HIGH;
+      }
+      lamp1State.publish("0");
+    }
+}
+
+void ChangeLamp2Status(int switchState) {
+  if((digitalRead(LAMP_TWO) == LOW) && (switchState == HIGH)) {
       if(lastSwitchTwoState == HIGH) {
         digitalWrite(SWITCH_TWO, LOW);
         lastSwitchTwoState = LOW;
@@ -225,7 +273,7 @@ void LampTwoIot(int switchState) {
       }
       lamp2State.publish("1");
     }
-    if(digitalRead(LAMP_TWO) == HIGH) {
+    if((digitalRead(LAMP_TWO) == HIGH) && (switchState == LOW)) {
       if(lastSwitchTwoState == HIGH) {
         digitalWrite(SWITCH_TWO, LOW);
         lastSwitchTwoState = LOW;
@@ -235,19 +283,27 @@ void LampTwoIot(int switchState) {
       }
       lamp2State.publish("0");
     }
-  }
 }
 
-void LampThree(int switchState) {
-  if(switchState == HIGH) {
-    // switch the lamp state
-    if(digitalRead(LAMP_THREE) == 1) {
-      digitalWrite(LAMP_THREE, LOW);
+void ChangeLamp3Status(int switchState) {
+  if((digitalRead(LAMP_THREE) == LOW) && (switchState == HIGH)) {
+      if(lastSwitchThreeState == HIGH) {
+        digitalWrite(SWITCH_THREE, LOW);
+        lastSwitchThreeState = LOW;
+      } else {
+        digitalWrite(SWITCH_THREE, HIGH);
+        lastSwitchThreeState = HIGH;
+      }
+      lamp3State.publish("1");
+    }
+    if((digitalRead(LAMP_THREE) == HIGH) && (switchState == LOW)) {
+      if(lastSwitchThreeState == HIGH) {
+        digitalWrite(SWITCH_THREE, LOW);
+        lastSwitchThreeState = LOW;
+      } else {
+        digitalWrite(SWITCH_THREE, HIGH);
+        lastSwitchThreeState = HIGH;
+      }
       lamp3State.publish("0");
     }
-    else {
-        digitalWrite(LAMP_THREE, HIGH);
-        lamp3State.publish("1");
-    }
-  }
 }
